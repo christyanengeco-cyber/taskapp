@@ -63,6 +63,33 @@ class Task {
       );
 }
 
+// Pintor customizado para gerar as rachuras diagonais vermelhas
+class HatchPainter extends CustomPainter {
+  final Color color;
+
+  HatchPainter({required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 2.0
+      ..style = PaintingStyle.stroke;
+
+    const double spacing = 12.0;
+    for (double i = -size.height; i < size.width; i += spacing) {
+      canvas.drawLine(
+        Offset(i, 0),
+        Offset(i + size.height, size.height),
+        paint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await initializeDateFormatting('pt_BR');
@@ -157,8 +184,22 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  // Verifica matematicamente se uma tarefa sobrepõe com qualquer outra do dia
+  bool hasConflict(Task targetTask, List<Task> dailyTasks) {
+    for (final other in dailyTasks) {
+      if (other.id == targetTask.id) continue;
+      // Condição de sobreposição: Início de A é menor que o Fim de B, E o Fim de A é maior que o Início de B
+      if (targetTask.start.isBefore(other.end) && targetTask.end.isAfter(other.start)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   @override
   Widget build(BuildContext context) {
+    final dailyTasks = today;
+
     return Scaffold(
       appBar: AppBar(
         title: Text(DateFormat('EEE, d MMM', 'pt_BR').format(day)),
@@ -225,10 +266,12 @@ class _HomeScreenState extends State<HomeScreen> {
                         right: 0,
                         child: Container(height: 2, color: Colors.red),
                       ),
-                    ...today.asMap().entries.map((e) {
-                      final t = e.value;
+                    ...dailyTasks.map((t) {
                       final top = (t.start.hour + t.start.minute / 60) * 76.0;
-                      final height = (t.end.difference(t.start).inMinutes / 60 * 76).clamp(32.0, 1000.0);
+                      // Mantemos um clamp mínimo para garantir que o bloco sempre possa ser tocado (ex: janelas curtas)
+                      final height = (t.end.difference(t.start).inMinutes / 60 * 76).clamp(40.0, 1000.0);
+                      final inConflict = hasConflict(t, dailyTasks);
+
                       return Positioned(
                         top: top,
                         left: t.type == TaskType.focus ? 72 : 64,
@@ -236,22 +279,61 @@ class _HomeScreenState extends State<HomeScreen> {
                         height: height,
                         child: GestureDetector(
                           onTap: () => t.failed ? resolve(t) : actions(t),
-                          child: Container(
-                            margin: const EdgeInsets.symmetric(vertical: 2),
-                            padding: const EdgeInsets.all(9),
-                            decoration: BoxDecoration(
-                              color: t.failed
-                                  ? Colors.red.withValues(alpha: .25)
-                                  : Color(t.color).withValues(alpha: t.type == TaskType.focus ? .85 : .18),
-                              borderRadius: BorderRadius.circular(10),
-                              border: Border.all(
-                                color: t.failed ? Colors.red : Color(t.color),
-                                width: t.failed ? 3 : 1,
-                              ),
-                            ),
-                            child: Text(
-                              '${t.failed ? '⚠ ' : ''}${t.title}\n${DateFormat('HH:mm').format(t.start)} - ${DateFormat('HH:mm').format(t.end)}',
-                              style: const TextStyle(fontWeight: FontWeight.bold),
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(10),
+                            child: Stack(
+                              children: [
+                                // Fundo Base da Tarefa
+                                Container(
+                                  decoration: BoxDecoration(
+                                    color: t.failed
+                                        ? Colors.red.withValues(alpha: .25)
+                                        : Color(t.color).withValues(alpha: t.type == TaskType.focus ? .85 : .18),
+                                    border: Border.all(
+                                      color: t.failed || inConflict ? Colors.red : Color(t.color),
+                                      width: t.failed || inConflict ? 2 : 1,
+                                    ),
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                ),
+                                // Se houver conflito, desenha as rachuras por cima
+                                if (inConflict)
+                                  Positioned.fill(
+                                    child: CustomPaint(
+                                      painter: HatchPainter(color: Colors.red.withValues(alpha: 0.5)),
+                                    ),
+                                  ),
+                                // Conteúdo em texto
+                                Positioned.fill(
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      children: [
+                                        Text(
+                                          '${t.failed ? '⚠ ' : ''}${t.title}',
+                                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                        // Só exibe a hora se a altura do bloco for generosa, ou esconde usando Flex
+                                        Flexible(
+                                          child: Text(
+                                            '${DateFormat('HH:mm').format(t.start)} - ${DateFormat('HH:mm').format(t.end)}',
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              color: Colors.white.withValues(alpha: 0.7),
+                                            ),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                         ),
@@ -274,15 +356,28 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> addTask() async {
     final title = TextEditingController();
     TaskType type = TaskType.focus;
-    TimeOfDay time = TimeOfDay.now();
+    TimeOfDay startTime = TimeOfDay.now();
+    TimeOfDay endTime = TimeOfDay(hour: (startTime.hour + 1) % 24, minute: startTime.minute);
     int mins = 30;
     int color = 0xff4f86f7;
+    String? errorMessage;
 
     final ok = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
       builder: (modalContext) => StatefulBuilder(
         builder: (ctx, set) {
+          // Lógica de validação de horário
+          void validateTimes() {
+            final startTotal = startTime.hour * 60 + startTime.minute;
+            final endTotal = endTime.hour * 60 + endTime.minute;
+            if (type == TaskType.flexible && endTotal <= startTotal) {
+              errorMessage = "O horário final deve ser maior que o inicial.";
+            } else {
+              errorMessage = null;
+            }
+          }
+
           return Padding(
             padding: EdgeInsets.only(
               left: 18,
@@ -306,15 +401,59 @@ class _HomeScreenState extends State<HomeScreen> {
                     DropdownMenuItem(value: TaskType.focus, child: Text('Tarefa de Foco')),
                     DropdownMenuItem(value: TaskType.flexible, child: Text('Janela Flexível')),
                   ],
-                  onChanged: (v) => set(() => type = v!),
-                ),
-                ListTile(
-                  title: Text('Início: ${time.format(ctx)}'),
-                  onTap: () async {
-                    final x = await showTimePicker(context: ctx, initialTime: time);
-                    if (x != null) set(() => time = x);
+                  onChanged: (v) {
+                    set(() {
+                      type = v!;
+                      validateTimes();
+                    });
                   },
                 ),
+                
+                // Seletor de tempo duplo para Flexível, simples para Foco
+                if (type == TaskType.focus)
+                  ListTile(
+                    title: Text('Início: ${startTime.format(ctx)}'),
+                    onTap: () async {
+                      final x = await showTimePicker(context: ctx, initialTime: startTime);
+                      if (x != null) set(() => startTime = x);
+                    },
+                  )
+                else
+                  Row(
+                    children: [
+                      Expanded(
+                        child: ListTile(
+                          title: Text('Início:\n${startTime.format(ctx)}', textAlign: TextAlign.center),
+                          onTap: () async {
+                            final x = await showTimePicker(context: ctx, initialTime: startTime);
+                            if (x != null) {
+                              set(() {
+                                startTime = x;
+                                validateTimes();
+                              });
+                            }
+                          },
+                        ),
+                      ),
+                      const Icon(Icons.arrow_forward_outlined, color: Colors.grey),
+                      Expanded(
+                        child: ListTile(
+                          title: Text('Fim:\n${endTime.format(ctx)}', textAlign: TextAlign.center),
+                          onTap: () async {
+                            final x = await showTimePicker(context: ctx, initialTime: endTime);
+                            if (x != null) {
+                              set(() {
+                                endTime = x;
+                                validateTimes();
+                              });
+                            }
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+
+                // Slider apenas para Foco
                 if (type == TaskType.focus)
                   Slider(
                     value: mins.toDouble(),
@@ -324,8 +463,16 @@ class _HomeScreenState extends State<HomeScreen> {
                     label: '$mins min',
                     onChanged: (v) => set(() => mins = v.round()),
                   ),
+
+                // Mensagem de erro condicional
+                if (errorMessage != null)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12.0),
+                    child: Text(errorMessage!, style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
+                  ),
+
                 FilledButton(
-                  onPressed: () => Navigator.pop(ctx, true),
+                  onPressed: errorMessage != null ? null : () => Navigator.pop(ctx, true),
                   child: const Text('Salvar'),
                 ),
               ],
@@ -336,7 +483,15 @@ class _HomeScreenState extends State<HomeScreen> {
     );
 
     if (ok != true || title.text.trim().isEmpty) return;
-    final s = DateTime(day.year, day.month, day.day, time.hour, time.minute);
+
+    final s = DateTime(day.year, day.month, day.day, startTime.hour, startTime.minute);
+    
+    // Calcula o deadline da flexível baseado no segundo relógio
+    DateTime? taskDeadline;
+    if (type == TaskType.flexible) {
+      taskDeadline = DateTime(day.year, day.month, day.day, endTime.hour, endTime.minute);
+    }
+
     tasks.add(
       Task(
         id: DateTime.now().microsecondsSinceEpoch.toString(),
@@ -345,7 +500,7 @@ class _HomeScreenState extends State<HomeScreen> {
         start: s,
         color: color,
         minutes: mins,
-        deadline: type == TaskType.flexible ? s.add(const Duration(hours: 4)) : null,
+        deadline: taskDeadline,
       ),
     );
     await save();
@@ -369,7 +524,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 Navigator.pop(ctx);
               },
             ),
-            if (t.snoozes < 3)
+            if (t.snoozes < 3 && t.type == TaskType.focus)
               ListTile(
                 leading: const Icon(Icons.snooze),
                 title: Text('Adiar ${[10, 5, 2][t.snoozes]} min'),
@@ -418,6 +573,11 @@ class _HomeScreenState extends State<HomeScreen> {
               onTap: () {
                 setState(() {
                   t.start = DateTime.now();
+                  // Reajusta o deadline caso fosse flexível
+                  if (t.type == TaskType.flexible && t.deadline != null) {
+                    final dur = t.deadline!.difference(t.start);
+                    t.deadline = DateTime.now().add(dur);
+                  }
                   t.status = TaskStatus.pending;
                   t.snoozes = 0;
                 });
@@ -431,6 +591,10 @@ class _HomeScreenState extends State<HomeScreen> {
               onTap: () {
                 setState(() {
                   t.start = DateTime.now().add(const Duration(days: 1));
+                  if (t.type == TaskType.flexible && t.deadline != null) {
+                    final dur = t.deadline!.difference(t.start);
+                    t.deadline = DateTime.now().add(const Duration(days: 1)).add(dur);
+                  }
                   t.status = TaskStatus.pending;
                   t.snoozes = 0;
                 });
