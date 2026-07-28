@@ -15,19 +15,36 @@ workflows:
           # 1. Gera a pasta nativa android na raiz
           flutter create --platforms=android .
 
-          # 2. Injeta o desugaring no android/app/build.gradle gerado
+          # 2. Injeta o desugaring no android/app/build.gradle.kts gerado (sintaxe Kotlin DSL)
           python3 -c "
-          file_path = 'android/app/build.gradle'
+          file_path = 'android/app/build.gradle.kts'
           with open(file_path, 'r') as f:
               code = f.read()
 
           # Habilita o desugaring em compileOptions
           if 'compileOptions {' in code:
-              code = code.replace('compileOptions {', 'compileOptions {\n        coreLibraryDesugaringEnabled true')
+              code = code.replace('compileOptions {', 'compileOptions {\n        isCoreLibraryDesugaringEnabled = true')
 
           # Adiciona a biblioteca de compatibilidade em dependencies
           if 'dependencies {' in code:
-              code = code.replace('dependencies {', 'dependencies {\n    coreLibraryDesugaring \"com.android.tools:desugar_jdk_libs:2.0.4\"')
+              code = code.replace('dependencies {', 'dependencies {\n    coreLibraryDesugaring(\"com.android.tools:desugar_jdk_libs:2.0.4\")')
+
+          with open(file_path, 'w') as f:
+              f.write(code)
+          "
+
+          # 3. Injeta as permissões de alarme exato e notificação de tela cheia no AndroidManifest.xml
+          python3 -c "
+          file_path = 'android/app/src/main/AndroidManifest.xml'
+          with open(file_path, 'r') as f:
+              code = f.read()
+
+          permissoes = (
+              '    <uses-permission android:name=\"android.permission.SCHEDULE_EXACT_ALARM\"/>\n'
+              '    <uses-permission android:name=\"android.permission.USE_FULL_SCREEN_INTENT\"/>\n'
+              '    <uses-permission android:name=\"android.permission.POST_NOTIFICATIONS\"/>\n'
+          )
+          code = code.replace('</manifest>', permissoes + '</manifest>')
 
           with open(file_path, 'w') as f:
               f.write(code)
