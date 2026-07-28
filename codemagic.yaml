@@ -10,6 +10,15 @@ workflows:
       - name: Prepare Android project
         script: |
           if [ ! -d android ]; then flutter create --platforms=android --org com.christyanengeco .; fi
+          
+          # Configurações para evitar travamentos do Kotlin/Gradle Daemon no CI
+          mkdir -p android
+          cat >> android/gradle.properties << 'EOF'
+          org.gradle.daemon=false
+          org.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=512m
+          kotlin.compiler.execution.strategy=in-process
+          EOF
+
           cat > test/widget_test.dart << 'EOF'
           import 'package:flutter/material.dart';
           import 'package:flutter_test/flutter_test.dart';
