@@ -1,12 +1,10 @@
 workflows:
   android-workflow:
-    name: Android Release Build
+    name: Android Test Build
     instance_type: mac_mini_m1
     max_build_duration: 30
     environment:
       flutter: stable
-      android_signing:
-        - keystore_credentials
     scripts:
       - name: Instalar dependencias
         script: |
@@ -14,7 +12,7 @@ workflows:
 
       - name: Gerar estrutura Android e configurar Desugaring
         script: |
-          # 1. Gera a pasta nativa android na raiz da máquina do Codemagic
+          # 1. Gera a pasta nativa android na raiz
           flutter create --platforms=android .
 
           # 2. Injeta o desugaring no android/app/build.gradle gerado
@@ -35,9 +33,9 @@ workflows:
               f.write(code)
           "
 
-      - name: Compilar APK
+      - name: Compilar APK de Teste
         script: |
-          flutter build apk --release
+          flutter build apk --debug
 
     artifacts:
       - build/app/outputs/flutter-apk/*.apk
