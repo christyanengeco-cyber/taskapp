@@ -18,7 +18,7 @@ class NotificationService {
 
   Future<void> init() async {
     tz.initializeTimeZones();
-    tz.setLocalLocation(tz.getLocation('America/Sao_Paulo')); // Ajuste para o fuso local
+    tz.setLocalLocation(tz.getLocation('America/Sao_Paulo'));
 
     const AndroidInitializationSettings initializationSettingsAndroid =
         AndroidInitializationSettings('@mipmap/ic_launcher');
@@ -29,17 +29,14 @@ class NotificationService {
 
     await flutterLocalNotificationsPlugin.initialize(initializationSettings);
 
-    // Requisita permissão no Android 13+
     await flutterLocalNotificationsPlugin
         .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
         ?.requestNotificationsPermission();
   }
 
   Future<void> scheduleTaskEndAlarm(Task task) async {
-    // Cancela o alarme anterior desta tarefa, se houver
     await cancelAlarm(task.id.hashCode);
 
-    // Não agenda alarme se a tarefa já estiver no passado ou for flexível (por enquanto)
     if (task.end.isBefore(DateTime.now()) || task.type == TaskType.flexible) return;
 
     const AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
@@ -55,7 +52,7 @@ class NotificationService {
     const NotificationDetails platformDetails = NotificationDetails(android: androidDetails);
 
     await flutterLocalNotificationsPlugin.zonedSchedule(
-      task.id.hashCode, // ID numérico único
+      task.id.hashCode,
       'Tempo esgotado!',
       'Sua tarefa "${task.title}" chegou ao fim.',
       tz.TZDateTime.from(task.end, tz.local),
@@ -154,6 +151,7 @@ class HatchPainter extends CustomPainter {
       canvas.drawLine(Offset(i, 0), Offset(i + size.height, size.height), paint);
     }
   }
+
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
@@ -161,7 +159,7 @@ class HatchPainter extends CustomPainter {
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await initializeDateFormatting('pt_BR');
-  await NotificationService().init(); // Inicializa o motor de alarmes
+  await NotificationService().init();
   runApp(const FocoApp());
 }
 
@@ -244,7 +242,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ((t.type == TaskType.flexible && t.deadline != null && now.isAfter(t.deadline!)) ||
               (t.type == TaskType.focus && now.isAfter(t.alarm.add(const Duration(minutes: 2)))))) {
         t.status = TaskStatus.failed;
-        NotificationService().cancelAlarm(t.id.hashCode); // Cancela alarme se falhou
+        NotificationService().cancelAlarm(t.id.hashCode);
         changed = true;
       }
     }
@@ -268,8 +266,13 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     final dailyTasks = today;
-    final focusTasks = dailyTasks.where((t) => t.type == TaskType.focus).toList();
     
+    // Ordena para desenhar as janelas flexíveis primeiro (fundo) e tarefas de foco por cima
+    final sortedDailyTasks = dailyTasks.toList()
+      ..sort((a, b) => a.type == TaskType.flexible ? -1 : 1);
+
+    final focusTasks = dailyTasks.where((t) => t.type == TaskType.focus).toList();
+
     Map<String, int> colOffset = {};
     Map<String, int> colSpan = {};
     List<List<Task>> clusters = [];
@@ -316,7 +319,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     final screenWidth = MediaQuery.of(context).size.width;
-    final availableWidth = screenWidth - 68; // Área útil ajustada
+    final availableWidth = screenWidth - 68;
 
     return Scaffold(
       appBar: AppBar(
@@ -383,24 +386,22 @@ class _HomeScreenState extends State<HomeScreen> {
                         child: Container(height: 2, color: Colors.red),
                       ),
                     
-                    // Ordena para desenhar as flexíveis PRIMEIRO (Ficam no fundo)
-                    ...dailyTasks.toList()..sort((a, b) => a.type == TaskType.flexible ? -1 : 1).map((t) {
+                    ...sortedDailyTasks.map((t) {
                       final top = (t.start.hour + t.start.minute / 60) * 76.0;
                       final height = (t.end.difference(t.start).inMinutes / 60 * 76).clamp(40.0, 1000.0);
                       
                       final isFlexible = t.type == TaskType.flexible;
                       final inConflict = hasConflict(t, dailyTasks);
                       
-                      // Lógica de camadas e recuos visuais
-                      double leftPos = 56; // Posição base (Flexível começa mais à esquerda)
+                      double leftPos = 56;
                       double itemWidth = availableWidth;
                       
                       if (!isFlexible) {
                         final span = colSpan[t.id] ?? 1;
                         final offset = colOffset[t.id] ?? 0;
-                        final focusAvailableWidth = availableWidth - 16; // Margem para não cobrir a borda da flexível
+                        final focusAvailableWidth = availableWidth - 16;
                         itemWidth = focusAvailableWidth / span;
-                        leftPos = 72 + (offset * itemWidth); // Foco tem mais recuo para parecer "dentro" da flexível
+                        leftPos = 72 + (offset * itemWidth);
                       }
 
                       return Positioned(
@@ -415,13 +416,12 @@ class _HomeScreenState extends State<HomeScreen> {
                             decoration: BoxDecoration(
                               color: t.failed
                                   ? Colors.red.withValues(alpha: .25)
-                                  : Color(t.color).withValues(alpha: isFlexible ? .12 : .85), // Flexível mais transparente
+                                  : Color(t.color).withValues(alpha: isFlexible ? .12 : .85),
                               borderRadius: BorderRadius.circular(8),
                               border: Border.all(
                                 color: t.failed || inConflict ? Colors.red : Color(t.color).withValues(alpha: isFlexible ? 0.4 : 1),
                                 width: t.failed || inConflict ? 2 : 1,
                               ),
-                              // Sombra apenas no Foco para dar noção de altura/camada superior
                               boxShadow: isFlexible ? [] : [
                                 BoxShadow(
                                   color: Colors.black.withValues(alpha: 0.4),
@@ -442,7 +442,6 @@ class _HomeScreenState extends State<HomeScreen> {
                                     ),
                                   Positioned.fill(
                                     child: Container(
-                                      // Se flexível, texto vai pro topo superior direito (longe das tarefas de foco). Se foco, no centro-esquerda.
                                       alignment: isFlexible ? Alignment.topRight : Alignment.centerLeft,
                                       padding: EdgeInsets.only(
                                         top: isFlexible ? 8 : 4,
@@ -509,7 +508,7 @@ class _HomeScreenState extends State<HomeScreen> {
         : TimeOfDay(hour: (startTime.hour + 1) % 24, minute: startTime.minute);
     
     int mins = taskToEdit?.minutes ?? 30;
-    int selectedColor = taskToEdit?.color ?? taskColors[0].value;
+    int selectedColor = taskToEdit?.color ?? taskColors[0].toARGB32();
     String? errorMessage;
 
     final ok = await showModalBottomSheet<bool>(
@@ -621,9 +620,9 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: taskColors.map((c) {
-                      final isSelected = selectedColor == c.value;
+                      final isSelected = selectedColor == c.toARGB32();
                       return GestureDetector(
-                        onTap: () => set(() => selectedColor = c.value),
+                        onTap: () => set(() => selectedColor = c.toARGB32()),
                         child: Container(
                           margin: const EdgeInsets.symmetric(horizontal: 6),
                           width: 36,
@@ -692,7 +691,6 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     await save();
-    // Agenda notificação nativa para disparar no fim da tarefa de foco
     await NotificationService().scheduleTaskEndAlarm(finalTask);
     
     if (mounted) setState(() {});
@@ -711,7 +709,7 @@ class _HomeScreenState extends State<HomeScreen> {
               title: const Text('Concluir'),
               onTap: () {
                 setState(() => t.status = TaskStatus.done);
-                NotificationService().cancelAlarm(t.id.hashCode); // Cancela o alarme se concluir antes
+                NotificationService().cancelAlarm(t.id.hashCode);
                 save();
                 Navigator.pop(ctx);
               },
@@ -734,7 +732,6 @@ class _HomeScreenState extends State<HomeScreen> {
                     t.snoozes++;
                   });
                   save();
-                  // Re-agenda o alarme baseando-se no novo tempo de término postergado
                   NotificationService().scheduleTaskEndAlarm(t);
                   Navigator.pop(ctx);
                 },
@@ -744,7 +741,7 @@ class _HomeScreenState extends State<HomeScreen> {
               title: const Text('Excluir manualmente'),
               onTap: () {
                 setState(() => tasks.remove(t));
-                NotificationService().cancelAlarm(t.id.hashCode); // Exclui o alarme do sistema
+                NotificationService().cancelAlarm(t.id.hashCode);
                 save();
                 Navigator.pop(ctx);
               },
