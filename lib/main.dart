@@ -8,6 +8,17 @@ import 'package:shared_preferences/shared_preferences.dart';
 enum TaskType { focus, flexible }
 enum TaskStatus { pending, done, failed }
 
+// Paleta de 7 cores pré-setadas para filtro futuro
+const List<Color> taskColors = [
+  Color(0xff4f86f7), // Azul (Padrão)
+  Color(0xffe57373), // Vermelho Suave
+  Color(0xff81c784), // Verde
+  Color(0xffffb74d), // Laranja
+  Color(0xffba68c8), // Roxo
+  Color(0xff4dd0e1), // Ciano
+  Color(0xffa1887f), // Marrom/Cinza
+];
+
 class Task {
   Task({
     required this.id,
@@ -63,10 +74,8 @@ class Task {
       );
 }
 
-// Pintor customizado para gerar as rachuras diagonais vermelhas
 class HatchPainter extends CustomPainter {
   final Color color;
-
   HatchPainter({required this.color});
 
   @override
@@ -75,17 +84,11 @@ class HatchPainter extends CustomPainter {
       ..color = color
       ..strokeWidth = 2.0
       ..style = PaintingStyle.stroke;
-
     const double spacing = 12.0;
     for (double i = -size.height; i < size.width; i += spacing) {
-      canvas.drawLine(
-        Offset(i, 0),
-        Offset(i + size.height, size.height),
-        paint,
-      );
+      canvas.drawLine(Offset(i, 0), Offset(i + size.height, size.height), paint);
     }
   }
-
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
@@ -184,11 +187,11 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  // Verifica matematicamente se uma tarefa sobrepõe com qualquer outra do dia
+  // Verifica se há conflito SOMENTE entre tarefas de Foco
   bool hasConflict(Task targetTask, List<Task> dailyTasks) {
+    if (targetTask.type == TaskType.flexible) return false;
     for (final other in dailyTasks) {
-      if (other.id == targetTask.id) continue;
-      // Condição de sobreposição: Início de A é menor que o Fim de B, E o Fim de A é maior que o Início de B
+      if (other.id == targetTask.id || other.type == TaskType.flexible) continue;
       if (targetTask.start.isBefore(other.end) && targetTask.end.isAfter(other.start)) {
         return true;
       }
@@ -199,6 +202,57 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     final dailyTasks = today;
+    final focusTasks = dailyTasks.where((t) => t.type == TaskType.focus).toList();
+    
+    // Algoritmo de posicionamento para evitar sobreposição visual (Colunas)
+    Map<String, int> colOffset = {};
+    Map<String, int> colSpan = {};
+    List<List<Task>> clusters = [];
+    List<Task> currentCluster = [];
+    DateTime? clusterEnd;
+
+    for (var t in focusTasks) {
+      if (currentCluster.isEmpty) {
+        currentCluster.add(t);
+        clusterEnd = t.end;
+      } else {
+        if (t.start.isBefore(clusterEnd!)) {
+          currentCluster.add(t);
+          if (t.end.isAfter(clusterEnd)) clusterEnd = t.end;
+        } else {
+          clusters.add(List.from(currentCluster));
+          currentCluster = [t];
+          clusterEnd = t.end;
+        }
+      }
+    }
+    if (currentCluster.isNotEmpty) clusters.add(currentCluster);
+
+    for (var cluster in clusters) {
+      List<List<Task>> cols = [];
+      for (var t in cluster) {
+        bool placed = false;
+        for (int i = 0; i < cols.length; i++) {
+          if (cols[i].last.end.compareTo(t.start) <= 0) {
+            cols[i].add(t);
+            colOffset[t.id] = i;
+            placed = true;
+            break;
+          }
+        }
+        if (!placed) {
+          cols.add([t]);
+          colOffset[t.id] = cols.length - 1;
+        }
+      }
+      for (var t in cluster) {
+        colSpan[t.id] = cols.length;
+      }
+    }
+
+    // Área útil da tela para calcular as larguras
+    final screenWidth = MediaQuery.of(context).size.width;
+    final availableWidth = screenWidth - 76; // Desconta espaço das horas e margem
 
     return Scaffold(
       appBar: AppBar(
@@ -240,6 +294,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 height: 24 * 76,
                 child: Stack(
                   children: [
+                    // Fundo: Linhas de horas
                     for (int i = 0; i < 24; i++)
                       Positioned(
                         top: i * 76,
@@ -249,16 +304,15 @@ class _HomeScreenState extends State<HomeScreen> {
                           children: [
                             SizedBox(
                               width: 60,
-                              child: Text(
-                                '${i.toString().padLeft(2, '0')}:00',
-                                textAlign: TextAlign.right,
-                              ),
+                              child: Text('${i.toString().padLeft(2, '0')}:00', textAlign: TextAlign.right),
                             ),
                             const SizedBox(width: 8),
                             const Expanded(child: Divider(color: Colors.white12)),
                           ],
                         ),
                       ),
+                    
+                    // Linha do tempo atual
                     if (DateUtils.isSameDay(day, now))
                       Positioned(
                         top: (now.hour + now.minute / 60) * 76,
@@ -266,74 +320,93 @@ class _HomeScreenState extends State<HomeScreen> {
                         right: 0,
                         child: Container(height: 2, color: Colors.red),
                       ),
+                    
+                    // Renderização das Tarefas
                     ...dailyTasks.map((t) {
                       final top = (t.start.hour + t.start.minute / 60) * 76.0;
-                      // Mantemos um clamp mínimo para garantir que o bloco sempre possa ser tocado (ex: janelas curtas)
                       final height = (t.end.difference(t.start).inMinutes / 60 * 76).clamp(40.0, 1000.0);
+                      
+                      // Cálculo visual
+                      final isFlexible = t.type == TaskType.flexible;
                       final inConflict = hasConflict(t, dailyTasks);
+                      
+                      // Posições baseadas no cluster (se for foco)
+                      double leftPos = 64;
+                      double itemWidth = availableWidth;
+                      
+                      if (!isFlexible) {
+                        final span = colSpan[t.id] ?? 1;
+                        final offset = colOffset[t.id] ?? 0;
+                        itemWidth = availableWidth / span;
+                        leftPos = 64 + (offset * itemWidth);
+                      }
 
                       return Positioned(
                         top: top,
-                        left: t.type == TaskType.focus ? 72 : 64,
-                        right: 12,
+                        left: leftPos,
+                        width: itemWidth,
                         height: height,
                         child: GestureDetector(
                           onTap: () => t.failed ? resolve(t) : actions(t),
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(10),
-                            child: Stack(
-                              children: [
-                                // Fundo Base da Tarefa
-                                Container(
-                                  decoration: BoxDecoration(
-                                    color: t.failed
-                                        ? Colors.red.withValues(alpha: .25)
-                                        : Color(t.color).withValues(alpha: t.type == TaskType.focus ? .85 : .18),
-                                    border: Border.all(
-                                      color: t.failed || inConflict ? Colors.red : Color(t.color),
-                                      width: t.failed || inConflict ? 2 : 1,
+                          child: Container(
+                            margin: const EdgeInsets.only(right: 2, bottom: 2), // Espaçamento entre as colunas
+                            decoration: BoxDecoration(
+                              color: t.failed
+                                  ? Colors.red.withValues(alpha: .25)
+                                  : Color(t.color).withValues(alpha: isFlexible ? .15 : .85),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color: t.failed || inConflict ? Colors.red : Color(t.color).withValues(alpha: isFlexible ? 0.5 : 1),
+                                width: t.failed || inConflict ? 2 : 1,
+                              ),
+                              boxShadow: isFlexible ? [] : [
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.3),
+                                  blurRadius: 4,
+                                  offset: const Offset(2, 2),
+                                )
+                              ],
+                            ),
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(8),
+                              child: Stack(
+                                children: [
+                                  if (inConflict)
+                                    Positioned.fill(
+                                      child: CustomPaint(
+                                        painter: HatchPainter(color: Colors.red.withValues(alpha: 0.5)),
+                                      ),
                                     ),
-                                    borderRadius: BorderRadius.circular(10),
-                                  ),
-                                ),
-                                // Se houver conflito, desenha as rachuras por cima
-                                if (inConflict)
                                   Positioned.fill(
-                                    child: CustomPaint(
-                                      painter: HatchPainter(color: Colors.red.withValues(alpha: 0.5)),
-                                    ),
-                                  ),
-                                // Conteúdo em texto
-                                Positioned.fill(
-                                  child: Padding(
-                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      mainAxisAlignment: MainAxisAlignment.center,
-                                      children: [
-                                        Text(
-                                          '${t.failed ? '⚠ ' : ''}${t.title}',
-                                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                        // Só exibe a hora se a altura do bloco for generosa, ou esconde usando Flex
-                                        Flexible(
-                                          child: Text(
-                                            '${DateFormat('HH:mm').format(t.start)} - ${DateFormat('HH:mm').format(t.end)}',
-                                            style: TextStyle(
-                                              fontSize: 12,
-                                              color: Colors.white.withValues(alpha: 0.7),
-                                            ),
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        mainAxisAlignment: MainAxisAlignment.center,
+                                        children: [
+                                          Text(
+                                            '${t.failed ? '⚠ ' : ''}${t.title}',
+                                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
                                             maxLines: 1,
                                             overflow: TextOverflow.ellipsis,
                                           ),
-                                        ),
-                                      ],
+                                          Flexible(
+                                            child: Text(
+                                              '${DateFormat('HH:mm').format(t.start)} - ${DateFormat('HH:mm').format(t.end)}',
+                                              style: TextStyle(
+                                                fontSize: 11,
+                                                color: Colors.white.withValues(alpha: 0.75),
+                                              ),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
                                     ),
                                   ),
-                                ),
-                              ],
+                                ],
+                              ),
                             ),
                           ),
                         ),
@@ -347,19 +420,23 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       ),
       floatingActionButton: FloatingActionButton.large(
-        onPressed: blocked ? null : addTask,
+        onPressed: blocked ? null : () => showTaskForm(),
         child: Icon(blocked ? Icons.lock : Icons.add),
       ),
     );
   }
 
-  Future<void> addTask() async {
-    final title = TextEditingController();
-    TaskType type = TaskType.focus;
-    TimeOfDay startTime = TimeOfDay.now();
-    TimeOfDay endTime = TimeOfDay(hour: (startTime.hour + 1) % 24, minute: startTime.minute);
-    int mins = 30;
-    int color = 0xff4f86f7;
+  // Refatorado: Serve para Adicionar e Editar, além de fixar o teclado e as cores
+  Future<void> showTaskForm({Task? taskToEdit}) async {
+    final title = TextEditingController(text: taskToEdit?.title ?? '');
+    TaskType type = taskToEdit?.type ?? TaskType.focus;
+    TimeOfDay startTime = taskToEdit != null ? TimeOfDay.fromDateTime(taskToEdit.start) : TimeOfDay.now();
+    TimeOfDay endTime = taskToEdit?.deadline != null
+        ? TimeOfDay.fromDateTime(taskToEdit!.deadline!)
+        : TimeOfDay(hour: (startTime.hour + 1) % 24, minute: startTime.minute);
+    
+    int mins = taskToEdit?.minutes ?? 30;
+    int selectedColor = taskToEdit?.color ?? taskColors[0].value;
     String? errorMessage;
 
     final ok = await showModalBottomSheet<bool>(
@@ -367,7 +444,6 @@ class _HomeScreenState extends State<HomeScreen> {
       isScrollControlled: true,
       builder: (modalContext) => StatefulBuilder(
         builder: (ctx, set) {
-          // Lógica de validação de horário
           void validateTimes() {
             final startTotal = startTime.hour * 60 + startTime.minute;
             final endTotal = endTime.hour * 60 + endTime.minute;
@@ -390,26 +466,30 @@ class _HomeScreenState extends State<HomeScreen> {
               children: [
                 TextField(
                   controller: title,
-                  autofocus: true,
+                  autofocus: taskToEdit == null,
                   decoration: const InputDecoration(hintText: 'O que precisa acontecer?'),
                 ),
-                const SizedBox(height: 12),
-                DropdownButton<TaskType>(
-                  value: type,
-                  isExpanded: true,
-                  items: const [
-                    DropdownMenuItem(value: TaskType.focus, child: Text('Tarefa de Foco')),
-                    DropdownMenuItem(value: TaskType.flexible, child: Text('Janela Flexível')),
-                  ],
-                  onChanged: (v) {
-                    set(() {
-                      type = v!;
-                      validateTimes();
-                    });
-                  },
-                ),
+                const SizedBox(height: 16),
                 
-                // Seletor de tempo duplo para Flexível, simples para Foco
+                // SegmentedButton substitui o Dropdown (Resolve o bug do teclado)
+                SizedBox(
+                  width: double.infinity,
+                  child: SegmentedButton<TaskType>(
+                    segments: const [
+                      ButtonSegment(value: TaskType.focus, label: Text('Foco')),
+                      ButtonSegment(value: TaskType.flexible, label: Text('Janela Flexível')),
+                    ],
+                    selected: {type},
+                    onSelectionChanged: (newSelection) {
+                      set(() {
+                        type = newSelection.first;
+                        validateTimes();
+                      });
+                    },
+                  ),
+                ),
+                const SizedBox(height: 12),
+                
                 if (type == TaskType.focus)
                   ListTile(
                     title: Text('Início: ${startTime.format(ctx)}'),
@@ -453,18 +533,44 @@ class _HomeScreenState extends State<HomeScreen> {
                     ],
                   ),
 
-                // Slider apenas para Foco
+                // Slider corrigido: 15 a 120 min de 5 em 5 minutos = 21 divisões
                 if (type == TaskType.focus)
                   Slider(
                     value: mins.toDouble(),
                     min: 15,
                     max: 120,
-                    divisions: 7,
+                    divisions: 21,
                     label: '$mins min',
                     onChanged: (v) => set(() => mins = v.round()),
                   ),
 
-                // Mensagem de erro condicional
+                // Seletor das 7 cores
+                const SizedBox(height: 8),
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: taskColors.map((c) {
+                      final isSelected = selectedColor == c.value;
+                      return GestureDetector(
+                        onTap: () => set(() => selectedColor = c.value),
+                        child: Container(
+                          margin: const EdgeInsets.symmetric(horizontal: 6),
+                          width: 36,
+                          height: 36,
+                          decoration: BoxDecoration(
+                            color: c,
+                            shape: BoxShape.circle,
+                            border: isSelected ? Border.all(color: Colors.white, width: 3) : null,
+                            boxShadow: isSelected ? [BoxShadow(color: c, blurRadius: 8)] : null,
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ),
+                const SizedBox(height: 16),
+
                 if (errorMessage != null)
                   Padding(
                     padding: const EdgeInsets.only(bottom: 12.0),
@@ -473,7 +579,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
                 FilledButton(
                   onPressed: errorMessage != null ? null : () => Navigator.pop(ctx, true),
-                  child: const Text('Salvar'),
+                  child: Text(taskToEdit == null ? 'Salvar Tarefa' : 'Atualizar Tarefa'),
                 ),
               ],
             ),
@@ -485,24 +591,34 @@ class _HomeScreenState extends State<HomeScreen> {
     if (ok != true || title.text.trim().isEmpty) return;
 
     final s = DateTime(day.year, day.month, day.day, startTime.hour, startTime.minute);
-    
-    // Calcula o deadline da flexível baseado no segundo relógio
     DateTime? taskDeadline;
     if (type == TaskType.flexible) {
       taskDeadline = DateTime(day.year, day.month, day.day, endTime.hour, endTime.minute);
     }
 
-    tasks.add(
-      Task(
-        id: DateTime.now().microsecondsSinceEpoch.toString(),
-        title: title.text.trim(),
-        type: type,
-        start: s,
-        color: color,
-        minutes: mins,
-        deadline: taskDeadline,
-      ),
-    );
+    if (taskToEdit == null) {
+      tasks.add(
+        Task(
+          id: DateTime.now().microsecondsSinceEpoch.toString(),
+          title: title.text.trim(),
+          type: type,
+          start: s,
+          color: selectedColor,
+          minutes: mins,
+          deadline: taskDeadline,
+        ),
+      );
+    } else {
+      setState(() {
+        taskToEdit.title = title.text.trim();
+        taskToEdit.type = type;
+        taskToEdit.start = s;
+        taskToEdit.color = selectedColor;
+        taskToEdit.minutes = mins;
+        taskToEdit.deadline = taskDeadline;
+      });
+    }
+
     await save();
     if (mounted) setState(() {});
   }
@@ -514,7 +630,7 @@ class _HomeScreenState extends State<HomeScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            ListTile(title: Text(t.title)),
+            ListTile(title: Text(t.title, style: const TextStyle(fontWeight: FontWeight.bold))),
             ListTile(
               leading: const Icon(Icons.check),
               title: const Text('Concluir'),
@@ -522,6 +638,14 @@ class _HomeScreenState extends State<HomeScreen> {
                 setState(() => t.status = TaskStatus.done);
                 save();
                 Navigator.pop(ctx);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.edit),
+              title: const Text('Editar Tarefa'),
+              onTap: () {
+                Navigator.pop(ctx);
+                showTaskForm(taskToEdit: t);
               },
             ),
             if (t.snoozes < 3 && t.type == TaskType.focus)
@@ -573,7 +697,6 @@ class _HomeScreenState extends State<HomeScreen> {
               onTap: () {
                 setState(() {
                   t.start = DateTime.now();
-                  // Reajusta o deadline caso fosse flexível
                   if (t.type == TaskType.flexible && t.deadline != null) {
                     final dur = t.deadline!.difference(t.start);
                     t.deadline = DateTime.now().add(dur);
