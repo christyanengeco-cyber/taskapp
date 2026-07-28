@@ -8,9 +8,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 enum TaskType { focus, flexible }
 enum TaskStatus { pending, done, failed }
 
-// Paleta de 7 cores pré-setadas para filtro futuro
 const List<Color> taskColors = [
-  Color(0xff4f86f7), // Azul (Padrão)
+  Color(0xff4f86f7), // Azul
   Color(0xffe57373), // Vermelho Suave
   Color(0xff81c784), // Verde
   Color(0xffffb74d), // Laranja
@@ -187,7 +186,6 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  // Verifica se há conflito SOMENTE entre tarefas de Foco
   bool hasConflict(Task targetTask, List<Task> dailyTasks) {
     if (targetTask.type == TaskType.flexible) return false;
     for (final other in dailyTasks) {
@@ -204,7 +202,6 @@ class _HomeScreenState extends State<HomeScreen> {
     final dailyTasks = today;
     final focusTasks = dailyTasks.where((t) => t.type == TaskType.focus).toList();
     
-    // Algoritmo de posicionamento para evitar sobreposição visual (Colunas)
     Map<String, int> colOffset = {};
     Map<String, int> colSpan = {};
     List<List<Task>> clusters = [];
@@ -250,9 +247,8 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     }
 
-    // Área útil da tela para calcular as larguras
     final screenWidth = MediaQuery.of(context).size.width;
-    final availableWidth = screenWidth - 76; // Desconta espaço das horas e margem
+    final availableWidth = screenWidth - 76;
 
     return Scaffold(
       appBar: AppBar(
@@ -294,7 +290,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 height: 24 * 76,
                 child: Stack(
                   children: [
-                    // Fundo: Linhas de horas
                     for (int i = 0; i < 24; i++)
                       Positioned(
                         top: i * 76,
@@ -312,7 +307,6 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                       ),
                     
-                    // Linha do tempo atual
                     if (DateUtils.isSameDay(day, now))
                       Positioned(
                         top: (now.hour + now.minute / 60) * 76,
@@ -321,16 +315,13 @@ class _HomeScreenState extends State<HomeScreen> {
                         child: Container(height: 2, color: Colors.red),
                       ),
                     
-                    // Renderização das Tarefas
                     ...dailyTasks.map((t) {
                       final top = (t.start.hour + t.start.minute / 60) * 76.0;
                       final height = (t.end.difference(t.start).inMinutes / 60 * 76).clamp(40.0, 1000.0);
                       
-                      // Cálculo visual
                       final isFlexible = t.type == TaskType.flexible;
                       final inConflict = hasConflict(t, dailyTasks);
                       
-                      // Posições baseadas no cluster (se for foco)
                       double leftPos = 64;
                       double itemWidth = availableWidth;
                       
@@ -349,21 +340,22 @@ class _HomeScreenState extends State<HomeScreen> {
                         child: GestureDetector(
                           onTap: () => t.failed ? resolve(t) : actions(t),
                           child: Container(
-                            margin: const EdgeInsets.only(right: 2, bottom: 2), // Espaçamento entre as colunas
+                            // Margens adicionadas para criar respiro visual quando houver sobreposição
+                            margin: EdgeInsets.all(isFlexible ? 1.0 : 3.0),
                             decoration: BoxDecoration(
                               color: t.failed
                                   ? Colors.red.withValues(alpha: .25)
-                                  : Color(t.color).withValues(alpha: isFlexible ? .15 : .85),
+                                  : Color(t.color).withValues(alpha: isFlexible ? .15 : .90),
                               borderRadius: BorderRadius.circular(8),
                               border: Border.all(
-                                color: t.failed || inConflict ? Colors.red : Color(t.color).withValues(alpha: isFlexible ? 0.5 : 1),
+                                color: t.failed || inConflict ? Colors.red : Color(t.color).withValues(alpha: isFlexible ? 0.4 : 1),
                                 width: t.failed || inConflict ? 2 : 1,
                               ),
                               boxShadow: isFlexible ? [] : [
                                 BoxShadow(
-                                  color: Colors.black.withValues(alpha: 0.3),
-                                  blurRadius: 4,
-                                  offset: const Offset(2, 2),
+                                  color: Colors.black.withValues(alpha: 0.4),
+                                  blurRadius: 3,
+                                  offset: const Offset(1, 1),
                                 )
                               ],
                             ),
@@ -382,7 +374,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                                       child: Column(
                                         crossAxisAlignment: CrossAxisAlignment.start,
-                                        mainAxisAlignment: MainAxisAlignment.center,
+                                        mainAxisAlignment: MainAxisAlignment.center, // Centraliza verticalmente o texto para evitar conflito visual
                                         children: [
                                           Text(
                                             '${t.failed ? '⚠ ' : ''}${t.title}',
@@ -395,7 +387,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                               '${DateFormat('HH:mm').format(t.start)} - ${DateFormat('HH:mm').format(t.end)}',
                                               style: TextStyle(
                                                 fontSize: 11,
-                                                color: Colors.white.withValues(alpha: 0.75),
+                                                color: Colors.white.withValues(alpha: 0.8),
                                               ),
                                               maxLines: 1,
                                               overflow: TextOverflow.ellipsis,
@@ -426,7 +418,6 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // Refatorado: Serve para Adicionar e Editar, além de fixar o teclado e as cores
   Future<void> showTaskForm({Task? taskToEdit}) async {
     final title = TextEditingController(text: taskToEdit?.title ?? '');
     TaskType type = taskToEdit?.type ?? TaskType.focus;
@@ -471,7 +462,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
                 const SizedBox(height: 16),
                 
-                // SegmentedButton substitui o Dropdown (Resolve o bug do teclado)
                 SizedBox(
                   width: double.infinity,
                   child: SegmentedButton<TaskType>(
@@ -533,7 +523,6 @@ class _HomeScreenState extends State<HomeScreen> {
                     ],
                   ),
 
-                // Slider corrigido: 15 a 120 min de 5 em 5 minutos = 21 divisões
                 if (type == TaskType.focus)
                   Slider(
                     value: mins.toDouble(),
@@ -544,7 +533,6 @@ class _HomeScreenState extends State<HomeScreen> {
                     onChanged: (v) => set(() => mins = v.round()),
                   ),
 
-                // Seletor das 7 cores
                 const SizedBox(height: 8),
                 SingleChildScrollView(
                   scrollDirection: Axis.horizontal,
