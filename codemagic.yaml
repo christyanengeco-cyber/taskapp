@@ -3,52 +3,66 @@ workflows:
     name: Android Test Build
     instance_type: mac_mini_m1
     max_build_duration: 30
+
     environment:
       flutter: stable
+
     scripts:
       - name: Instalar dependencias
         script: |
           flutter pub get
 
-      - name: Gerar estrutura Android e configurar Desugaring
+      - name: Gerar estrutura Android e configurar
         script: |
-          # 1. Gera a pasta nativa android na raiz
           flutter create --platforms=android .
 
-          # 2. Injeta o desugaring no android/app/build.gradle.kts gerado (sintaxe Kotlin DSL)
-          python3 -c "
-          file_path = 'android/app/build.gradle.kts'
-          with open(file_path, 'r') as f:
-              code = f.read()
+          python3 << 'EOF'
+          from pathlib import Path
 
-          # Habilita o desugaring em compileOptions
-          if 'compileOptions {' in code:
-              code = code.replace('compileOptions {', 'compileOptions {\n        isCoreLibraryDesugaringEnabled = true')
+          gradle = Path("android/app/build.gradle.kts")
+          text = gradle.read_text()
 
-          # Adiciona a biblioteca de compatibilidade em dependencies
-          if 'dependencies {' in code:
-              code = code.replace('dependencies {', 'dependencies {\n    coreLibraryDesugaring(\"com.android.tools:desugar_jdk_libs:2.0.4\")')
+          if "isCoreLibraryDesugaringEnabled" not in text:
+              text = text.replace(
+                  "compileOptions {",
+                  "compileOptions {\n        isCoreLibraryDesugaringEnabled = true"
+              )
 
-          with open(file_path, 'w') as f:
-              f.write(code)
-          "
+          if "coreLibraryDesugaring(" not in text:
+              if "dependencies {" in text:
+                  text = text.replace(
+                      "dependencies {",
+                      'dependencies {\n    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")'
+                  )
+              else:
+                  text += """
 
-          # 3. Injeta as permissões de alarme exato e notificação de tela cheia no AndroidManifest.xml
-          python3 -c "
-          file_path = 'android/app/src/main/AndroidManifest.xml'
-          with open(file_path, 'r') as f:
-              code = f.read()
+          dependencies {
+              coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
+          }
+          """
 
-          permissoes = (
-              '    <uses-permission android:name=\"android.permission.SCHEDULE_EXACT_ALARM\"/>\n'
-              '    <uses-permission android:name=\"android.permission.USE_FULL_SCREEN_INTENT\"/>\n'
-              '    <uses-permission android:name=\"android.permission.POST_NOTIFICATIONS\"/>\n'
-          )
-          code = code.replace('</manifest>', permissoes + '</manifest>')
+          gradle.write_text(text)
 
-          with open(file_path, 'w') as f:
-              f.write(code)
-          "
+          manifest = Path("android/app/src/main/AndroidManifest.xml")
+          xml = manifest.read_text()
+
+          permissions = [
+              "android.permission.POST_NOTIFICATIONS",
+              "android.permission.SCHEDULE_EXACT_ALARM",
+              "android.permission.USE_FULL_SCREEN_INTENT",
+          ]
+
+          for p in permissions:
+              if p not in xml:
+                  xml = xml.replace(
+                      "<application",
+                      f'<uses-permission android:name="{p}"/>\n\n    <application',
+                      1
+                  )
+
+          manifest.write_text(xml)
+          EOF
 
       - name: Compilar APK de Teste
         script: |
