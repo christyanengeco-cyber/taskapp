@@ -4,19 +4,84 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:timezone/data/latest_all.dart' as tz;
+import 'package:timezone/timezone.dart' as tz;
 
+// --- MOTOR DE NOTIFICAÇÕES ---
+class NotificationService {
+  static final NotificationService _instance = NotificationService._internal();
+  factory NotificationService() => _instance;
+  NotificationService._internal();
+
+  final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
+
+  Future<void> init() async {
+    tz.initializeTimeZones();
+    tz.setLocalLocation(tz.getLocation('America/Sao_Paulo')); // Ajuste para o fuso local
+
+    const AndroidInitializationSettings initializationSettingsAndroid =
+        AndroidInitializationSettings('@mipmap/ic_launcher');
+
+    const InitializationSettings initializationSettings = InitializationSettings(
+      android: initializationSettingsAndroid,
+    );
+
+    await flutterLocalNotificationsPlugin.initialize(initializationSettings);
+
+    // Requisita permissão no Android 13+
+    await flutterLocalNotificationsPlugin
+        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+        ?.requestNotificationsPermission();
+  }
+
+  Future<void> scheduleTaskEndAlarm(Task task) async {
+    // Cancela o alarme anterior desta tarefa, se houver
+    await cancelAlarm(task.id.hashCode);
+
+    // Não agenda alarme se a tarefa já estiver no passado ou for flexível (por enquanto)
+    if (task.end.isBefore(DateTime.now()) || task.type == TaskType.flexible) return;
+
+    const AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
+      'foco_tdah_channel',
+      'Alarmes de Foco',
+      channelDescription: 'Avisa quando uma tarefa de foco é finalizada',
+      importance: Importance.max,
+      priority: Priority.high,
+      fullScreenIntent: true,
+      category: AndroidNotificationCategory.alarm,
+    );
+
+    const NotificationDetails platformDetails = NotificationDetails(android: androidDetails);
+
+    await flutterLocalNotificationsPlugin.zonedSchedule(
+      task.id.hashCode, // ID numérico único
+      'Tempo esgotado!',
+      'Sua tarefa "${task.title}" chegou ao fim.',
+      tz.TZDateTime.from(task.end, tz.local),
+      platformDetails,
+      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+      uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
+    );
+  }
+
+  Future<void> cancelAlarm(int id) async {
+    await flutterLocalNotificationsPlugin.cancel(id);
+  }
+}
+
+// --- MODELOS E CONSTANTES ---
 enum TaskType { focus, flexible }
 enum TaskStatus { pending, done, failed }
 
-// Paleta de 7 cores pré-setadas para filtro futuro
 const List<Color> taskColors = [
-  Color(0xff4f86f7), // Azul (Padrão)
-  Color(0xffe57373), // Vermelho Suave
-  Color(0xff81c784), // Verde
-  Color(0xffffb74d), // Laranja
-  Color(0xffba68c8), // Roxo
-  Color(0xff4dd0e1), // Ciano
-  Color(0xffa1887f), // Marrom/Cinza
+  Color(0xff4f86f7),
+  Color(0xffe57373),
+  Color(0xff81c784),
+  Color(0xffffb74d),
+  Color(0xffba68c8),
+  Color(0xff4dd0e1),
+  Color(0xffa1887f),
 ];
 
 class Task {
@@ -96,6 +161,7 @@ class HatchPainter extends CustomPainter {
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await initializeDateFormatting('pt_BR');
+  await NotificationService().init(); // Inicializa o motor de alarmes
   runApp(const FocoApp());
 }
 
@@ -178,6 +244,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ((t.type == TaskType.flexible && t.deadline != null && now.isAfter(t.deadline!)) ||
               (t.type == TaskType.focus && now.isAfter(t.alarm.add(const Duration(minutes: 2)))))) {
         t.status = TaskStatus.failed;
+        NotificationService().cancelAlarm(t.id.hashCode); // Cancela alarme se falhou
         changed = true;
       }
     }
@@ -187,7 +254,6 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  // Verifica se há conflito SOMENTE entre tarefas de Foco
   bool hasConflict(Task targetTask, List<Task> dailyTasks) {
     if (targetTask.type == TaskType.flexible) return false;
     for (final other in dailyTasks) {
@@ -204,7 +270,6 @@ class _HomeScreenState extends State<HomeScreen> {
     final dailyTasks = today;
     final focusTasks = dailyTasks.where((t) => t.type == TaskType.focus).toList();
     
-    // Algoritmo de posicionamento para evitar sobreposição visual (Colunas)
     Map<String, int> colOffset = {};
     Map<String, int> colSpan = {};
     List<List<Task>> clusters = [];
@@ -250,9 +315,8 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     }
 
-    // Área útil da tela para calcular as larguras
     final screenWidth = MediaQuery.of(context).size.width;
-    final availableWidth = screenWidth - 76; // Desconta espaço das horas e margem
+    final availableWidth = screenWidth - 68; // Área útil ajustada
 
     return Scaffold(
       appBar: AppBar(
@@ -294,7 +358,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 height: 24 * 76,
                 child: Stack(
                   children: [
-                    // Fundo: Linhas de horas
                     for (int i = 0; i < 24; i++)
                       Positioned(
                         top: i * 76,
@@ -303,7 +366,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         child: Row(
                           children: [
                             SizedBox(
-                              width: 60,
+                              width: 52,
                               child: Text('${i.toString().padLeft(2, '0')}:00', textAlign: TextAlign.right),
                             ),
                             const SizedBox(width: 8),
@@ -312,7 +375,6 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                       ),
                     
-                    // Linha do tempo atual
                     if (DateUtils.isSameDay(day, now))
                       Positioned(
                         top: (now.hour + now.minute / 60) * 76,
@@ -321,24 +383,24 @@ class _HomeScreenState extends State<HomeScreen> {
                         child: Container(height: 2, color: Colors.red),
                       ),
                     
-                    // Renderização das Tarefas
-                    ...dailyTasks.map((t) {
+                    // Ordena para desenhar as flexíveis PRIMEIRO (Ficam no fundo)
+                    ...dailyTasks.toList()..sort((a, b) => a.type == TaskType.flexible ? -1 : 1).map((t) {
                       final top = (t.start.hour + t.start.minute / 60) * 76.0;
                       final height = (t.end.difference(t.start).inMinutes / 60 * 76).clamp(40.0, 1000.0);
                       
-                      // Cálculo visual
                       final isFlexible = t.type == TaskType.flexible;
                       final inConflict = hasConflict(t, dailyTasks);
                       
-                      // Posições baseadas no cluster (se for foco)
-                      double leftPos = 64;
+                      // Lógica de camadas e recuos visuais
+                      double leftPos = 56; // Posição base (Flexível começa mais à esquerda)
                       double itemWidth = availableWidth;
                       
                       if (!isFlexible) {
                         final span = colSpan[t.id] ?? 1;
                         final offset = colOffset[t.id] ?? 0;
-                        itemWidth = availableWidth / span;
-                        leftPos = 64 + (offset * itemWidth);
+                        final focusAvailableWidth = availableWidth - 16; // Margem para não cobrir a borda da flexível
+                        itemWidth = focusAvailableWidth / span;
+                        leftPos = 72 + (offset * itemWidth); // Foco tem mais recuo para parecer "dentro" da flexível
                       }
 
                       return Positioned(
@@ -349,19 +411,20 @@ class _HomeScreenState extends State<HomeScreen> {
                         child: GestureDetector(
                           onTap: () => t.failed ? resolve(t) : actions(t),
                           child: Container(
-                            margin: const EdgeInsets.only(right: 2, bottom: 2), // Espaçamento entre as colunas
+                            margin: EdgeInsets.only(right: isFlexible ? 4 : 2, bottom: 2),
                             decoration: BoxDecoration(
                               color: t.failed
                                   ? Colors.red.withValues(alpha: .25)
-                                  : Color(t.color).withValues(alpha: isFlexible ? .15 : .85),
+                                  : Color(t.color).withValues(alpha: isFlexible ? .12 : .85), // Flexível mais transparente
                               borderRadius: BorderRadius.circular(8),
                               border: Border.all(
-                                color: t.failed || inConflict ? Colors.red : Color(t.color).withValues(alpha: isFlexible ? 0.5 : 1),
+                                color: t.failed || inConflict ? Colors.red : Color(t.color).withValues(alpha: isFlexible ? 0.4 : 1),
                                 width: t.failed || inConflict ? 2 : 1,
                               ),
+                              // Sombra apenas no Foco para dar noção de altura/camada superior
                               boxShadow: isFlexible ? [] : [
                                 BoxShadow(
-                                  color: Colors.black.withValues(alpha: 0.3),
+                                  color: Colors.black.withValues(alpha: 0.4),
                                   blurRadius: 4,
                                   offset: const Offset(2, 2),
                                 )
@@ -378,15 +441,26 @@ class _HomeScreenState extends State<HomeScreen> {
                                       ),
                                     ),
                                   Positioned.fill(
-                                    child: Padding(
-                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                    child: Container(
+                                      // Se flexível, texto vai pro topo superior direito (longe das tarefas de foco). Se foco, no centro-esquerda.
+                                      alignment: isFlexible ? Alignment.topRight : Alignment.centerLeft,
+                                      padding: EdgeInsets.only(
+                                        top: isFlexible ? 8 : 4,
+                                        right: 8,
+                                        left: 8,
+                                        bottom: 4,
+                                      ),
                                       child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        mainAxisAlignment: MainAxisAlignment.center,
+                                        crossAxisAlignment: isFlexible ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                                        mainAxisSize: MainAxisSize.min,
                                         children: [
                                           Text(
                                             '${t.failed ? '⚠ ' : ''}${t.title}',
-                                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.bold, 
+                                              fontSize: isFlexible ? 14 : 13,
+                                              color: isFlexible ? Color(t.color).withValues(alpha: 0.9) : Colors.white
+                                            ),
                                             maxLines: 1,
                                             overflow: TextOverflow.ellipsis,
                                           ),
@@ -395,7 +469,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                               '${DateFormat('HH:mm').format(t.start)} - ${DateFormat('HH:mm').format(t.end)}',
                                               style: TextStyle(
                                                 fontSize: 11,
-                                                color: Colors.white.withValues(alpha: 0.75),
+                                                color: (isFlexible ? Color(t.color) : Colors.white).withValues(alpha: 0.75),
                                               ),
                                               maxLines: 1,
                                               overflow: TextOverflow.ellipsis,
@@ -426,7 +500,6 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // Refatorado: Serve para Adicionar e Editar, além de fixar o teclado e as cores
   Future<void> showTaskForm({Task? taskToEdit}) async {
     final title = TextEditingController(text: taskToEdit?.title ?? '');
     TaskType type = taskToEdit?.type ?? TaskType.focus;
@@ -471,7 +544,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
                 const SizedBox(height: 16),
                 
-                // SegmentedButton substitui o Dropdown (Resolve o bug do teclado)
                 SizedBox(
                   width: double.infinity,
                   child: SegmentedButton<TaskType>(
@@ -533,7 +605,6 @@ class _HomeScreenState extends State<HomeScreen> {
                     ],
                   ),
 
-                // Slider corrigido: 15 a 120 min de 5 em 5 minutos = 21 divisões
                 if (type == TaskType.focus)
                   Slider(
                     value: mins.toDouble(),
@@ -544,7 +615,6 @@ class _HomeScreenState extends State<HomeScreen> {
                     onChanged: (v) => set(() => mins = v.round()),
                   ),
 
-                // Seletor das 7 cores
                 const SizedBox(height: 8),
                 SingleChildScrollView(
                   scrollDirection: Axis.horizontal,
@@ -596,18 +666,19 @@ class _HomeScreenState extends State<HomeScreen> {
       taskDeadline = DateTime(day.year, day.month, day.day, endTime.hour, endTime.minute);
     }
 
+    Task finalTask;
+
     if (taskToEdit == null) {
-      tasks.add(
-        Task(
-          id: DateTime.now().microsecondsSinceEpoch.toString(),
-          title: title.text.trim(),
-          type: type,
-          start: s,
-          color: selectedColor,
-          minutes: mins,
-          deadline: taskDeadline,
-        ),
+      finalTask = Task(
+        id: DateTime.now().microsecondsSinceEpoch.toString(),
+        title: title.text.trim(),
+        type: type,
+        start: s,
+        color: selectedColor,
+        minutes: mins,
+        deadline: taskDeadline,
       );
+      tasks.add(finalTask);
     } else {
       setState(() {
         taskToEdit.title = title.text.trim();
@@ -617,9 +688,13 @@ class _HomeScreenState extends State<HomeScreen> {
         taskToEdit.minutes = mins;
         taskToEdit.deadline = taskDeadline;
       });
+      finalTask = taskToEdit;
     }
 
     await save();
+    // Agenda notificação nativa para disparar no fim da tarefa de foco
+    await NotificationService().scheduleTaskEndAlarm(finalTask);
+    
     if (mounted) setState(() {});
   }
 
@@ -636,6 +711,7 @@ class _HomeScreenState extends State<HomeScreen> {
               title: const Text('Concluir'),
               onTap: () {
                 setState(() => t.status = TaskStatus.done);
+                NotificationService().cancelAlarm(t.id.hashCode); // Cancela o alarme se concluir antes
                 save();
                 Navigator.pop(ctx);
               },
@@ -658,6 +734,8 @@ class _HomeScreenState extends State<HomeScreen> {
                     t.snoozes++;
                   });
                   save();
+                  // Re-agenda o alarme baseando-se no novo tempo de término postergado
+                  NotificationService().scheduleTaskEndAlarm(t);
                   Navigator.pop(ctx);
                 },
               ),
@@ -666,6 +744,7 @@ class _HomeScreenState extends State<HomeScreen> {
               title: const Text('Excluir manualmente'),
               onTap: () {
                 setState(() => tasks.remove(t));
+                NotificationService().cancelAlarm(t.id.hashCode); // Exclui o alarme do sistema
                 save();
                 Navigator.pop(ctx);
               },
@@ -705,6 +784,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   t.snoozes = 0;
                 });
                 save();
+                NotificationService().scheduleTaskEndAlarm(t);
                 Navigator.pop(ctx);
               },
             ),
@@ -722,6 +802,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   t.snoozes = 0;
                 });
                 save();
+                NotificationService().scheduleTaskEndAlarm(t);
                 Navigator.pop(ctx);
               },
             ),
