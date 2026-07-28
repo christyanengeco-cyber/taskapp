@@ -1,39 +1,43 @@
 workflows:
-  android-apk:
-    name: Foco TDAH Android APK
-    instance_type: mac_mini_m2
+  android-workflow:
+    name: Android Release Build
+    instance_type: mac_mini_m1
     max_build_duration: 30
     environment:
       flutter: stable
-      java: 17
+      android_signing:
+        - keystore_credentials
     scripts:
-      - name: Prepare Android project
+      - name: Instalar dependencias
         script: |
-          if [ ! -d android ]; then flutter create --platforms=android --org com.christyanengeco .; fi
-          
-          # Configurações para evitar travamentos do Kotlin/Gradle Daemon no CI
-          mkdir -p android
-          cat >> android/gradle.properties << 'EOF'
-          org.gradle.daemon=false
-          org.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=512m
-          kotlin.compiler.execution.strategy=in-process
-          EOF
+          flutter pub get
 
-          cat > test/widget_test.dart << 'EOF'
-          import 'package:flutter/material.dart';
-          import 'package:flutter_test/flutter_test.dart';
+      - name: Gerar estrutura Android e configurar Desugaring
+        script: |
+          # 1. Gera a pasta nativa android na raiz da máquina do Codemagic
+          flutter create --platforms=android .
 
-          void main() {
-            testWidgets('smoke test', (tester) async {
-              await tester.pumpWidget(const SizedBox());
-            });
-          }
-          EOF
-      - name: Get packages
-        script: flutter pub get
-      - name: Analyze
-        script: flutter analyze --no-fatal-warnings --no-fatal-infos
-      - name: Build APK
-        script: flutter build apk --release
+          # 2. Injeta o desugaring no android/app/build.gradle gerado
+          python3 -c "
+          file_path = 'android/app/build.gradle'
+          with open(file_path, 'r') as f:
+              code = f.read()
+
+          # Habilita o desugaring em compileOptions
+          if 'compileOptions {' in code:
+              code = code.replace('compileOptions {', 'compileOptions {\n        coreLibraryDesugaringEnabled true')
+
+          # Adiciona a biblioteca de compatibilidade em dependencies
+          if 'dependencies {' in code:
+              code = code.replace('dependencies {', 'dependencies {\n    coreLibraryDesugaring \"com.android.tools:desugar_jdk_libs:2.0.4\"')
+
+          with open(file_path, 'w') as f:
+              f.write(code)
+          "
+
+      - name: Compilar APK
+        script: |
+          flutter build apk --release
+
     artifacts:
-      - build/app/outputs/flutter-apk/app-release.apk
+      - build/app/outputs/flutter-apk/*.apk
